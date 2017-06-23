@@ -1,0 +1,6 @@
+[package]
+name = "fuzzy-hash"
+version = "0.1.0"
+authors = ["Jem Tucker <jem.tucker@gmail.com>"]
+
+[dependencies]
