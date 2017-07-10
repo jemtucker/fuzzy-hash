@@ -1,6 +1,3 @@
-
-
-
 mod internal;
 
 #[cfg(test)]

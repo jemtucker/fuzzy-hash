@@ -36,7 +36,7 @@ impl RollingHash for AddlerBasedRollingHash {
     }
 
     fn sum(&self) -> u32 {
-        (self.h1 + self.h2 + self.h3) as u32
+        self.h1.wrapping_add(self.h2.wrapping_add(self.h3))
     }
 }
 

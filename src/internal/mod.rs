@@ -8,7 +8,8 @@ const NUM_BLOCK_HASHES: usize = 32;
 const MIN_BLOCK_SIZE: u32 = 3;
 const SPAMSUM_LENGTH: u32 = 64;
 const BASE_64: &'static str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-const TOTAL_SIZE_MAX: usize = ((MIN_BLOCK_SIZE as usize << (NUM_BLOCK_HASHES - 1)) * SPAMSUM_LENGTH as usize);
+
+const TOTAL_SIZE_MAX: usize = (((MIN_BLOCK_SIZE as usize) << (NUM_BLOCK_HASHES - 1)) * SPAMSUM_LENGTH as usize);
 
 #[inline(always)]
 fn block_size(index: u32) -> u32 {
@@ -17,7 +18,7 @@ fn block_size(index: u32) -> u32 {
 
 #[inline(always)]
 fn sum_hash(h: u32, byte: u8) -> u32 {
-    (h * HASH_PRIME) ^ (byte as u32)
+    h.wrapping_mul(HASH_PRIME) ^ (byte as u32)
 }
 
 #[inline(always)]
@@ -26,7 +27,7 @@ fn base_64(h: u32) -> u8 {
     BASE_64.as_bytes()[index]
 }
 
-struct Context {
+pub struct Context {
     total_size: usize,
     fixed_size: usize,
     last_hash: u32,
@@ -186,7 +187,138 @@ impl Context {
         self.block_hash_start += 1;
     }
 
-    pub fn digest(&mut self) -> &[u8] {
-        unimplemented!();
+    pub fn digest(&mut self) -> String {
+        let mut bi = self.block_hash_start;
+        let h = self.rolling_hash.sum();
+
+        /* Verify that our elimination was not overeager. */
+        assert!(bi == 0 || (block_size(bi as u32) / (2 * SPAMSUM_LENGTH)) < (self.total_size as u32));
+
+        if self.total_size > TOTAL_SIZE_MAX {
+            panic!("The input exceeds data types");
+        }
+
+        /* Fixed size optimization. */
+        if self.is_fixed_size && self.fixed_size != self.total_size {
+            panic!("Total size not equal to fixed size");
+        }
+
+        /* Initial blocksize guess. */
+        loop {
+            if block_size(bi as u32) * SPAMSUM_LENGTH < (self.total_size as u32) {
+                bi += 1;
+            } else {
+                break;
+            }
+        }
+
+        /* Adapt blocksize guess to actual digest length. */
+        if bi >= self.block_hash_end {
+            bi = self.block_hash_end - 1;
+        }
+
+        loop {
+            let bh = self.block_hashes[bi];
+            if bi > self.block_hash_start && bh.index < (SPAMSUM_LENGTH as usize / 2) {
+                bi -= 1;
+            } else {
+                break;
+            }
+        }
+
+        assert!(!(bi > 0 && self.block_hashes[bi].index < (SPAMSUM_LENGTH as usize / 2)));
+
+        // Start building up the digest, starting with the initial block size
+        // TODO Init with final capacity
+        let mut result = String::new();
+        result.push_str(&block_size(bi as u32).to_string());
+        result.push_str(":");
+
+        // TODO implement
+        // if ((flags & FUZZY_FLAG_ELIMSEQ) != 0)
+        //     i = memcpy_eliminate_sequences(result, self->bh[bi].digest, i);
+        // else
+
+        // WRONG! Should only be pushing up do block_hash.index!
+        // for i in 0..bh.index {
+        //     result.push(bh.digest[i]);
+        // }
+        let digest = String::from_utf8_lossy(&self.block_hashes[bi].digest.0);
+        result.push_str(&digest);
+
+        if h != 0 {
+            let hex = base_64(self.block_hashes[bi].h);
+            result.push(hex as char);
+            // if((flags & FUZZY_FLAG_ELIMSEQ) == 0 || i < 3 ||
+            //         *result != result[-1] ||
+            //         *result != result[-2] ||
+            //         *result != result[-3]) {
+            //     ++result;
+            //     --remain;
+            // }
+        } else if self.block_hashes[bi].digest.0[self.block_hashes[bi].index] != 0 {
+            result.push(self.block_hashes[bi].digest.0[self.block_hashes[bi].index] as char);
+            // if((flags & FUZZY_FLAG_ELIMSEQ) == 0 || i < 3 ||
+            //         *result != result[-1] ||
+            //         *result != result[-2] ||
+            //         *result != result[-3]) {
+            //     ++result;
+            //     --remain;
+            // }
+        }
+
+        if bi < self.block_hash_end - 1 {
+            bi += 1;
+            let mut bh = self.block_hashes[bi];
+            for i in 0..bh.index {
+                result.push(bh.digest.0[i] as char);
+            }
+
+            // if ((flags & FUZZY_FLAG_NOTRUNC) == 0 &&
+            // i > SPAMSUM_LENGTH / 2 - 1)
+            //      i = SPAMSUM_LENGTH / 2 - 1;
+            // if ((flags & FUZZY_FLAG_ELIMSEQ) != 0)
+            //     i = memcpy_eliminate_sequences(result, self->bh[bi].digest, i);
+            // else
+
+            if h != 0 {
+                //h = (flags & FUZZY_FLAG_NOTRUNC) != 0 ? self->bh[bi].h : self->bh[bi].halfh;
+                let hex = base_64(self.block_hashes[bi].h);
+                result.push(hex as char);
+                // if ((flags & FUZZY_FLAG_ELIMSEQ) == 0 || i < 3 ||
+                //         *result != result[-1] ||
+                //         *result != result[-2] ||
+                //         *result != result[-3]) {
+                //     ++result;
+                //     --remain;
+                // }
+            } else {
+                //i = (flags & FUZZY_FLAG_NOTRUNC) != 0 ?
+                    //self->bh[bi].digest[self->bh[bi].dindex] : self->bh[bi].halfdigest;
+                let i = self.block_hashes[bi].halfdigest;
+                if i != 0 {
+                    result.push(i as char);
+                    // if ((flags & FUZZY_FLAG_ELIMSEQ) == 0 || i < 3 ||
+                    //         *result != result[-1] ||
+                    //         *result != result[-2] ||
+                    //         *result != result[-3]) {
+                    //     ++result;
+                    //     --remain;
+                    // }
+                }
+            }
+        } else if h != 0 {
+            assert!(bi == 0 || bi == NUM_BLOCK_HASHES - 1);
+            
+            if bi == 0 {
+                let hex = base_64(self.block_hashes[bi].h);
+                result.push(hex as char);
+            } else {
+                let hex = base_64(self.last_hash);
+                result.push(hex as char);
+            }
+        }
+
+        return result;
     }
 }
